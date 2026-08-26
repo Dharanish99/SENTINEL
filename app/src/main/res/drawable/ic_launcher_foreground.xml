@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Shield body, filled with SentinalEmerald (#2FBF71 - "safe / secured" status color) -->
+    <path
+        android:fillColor="#2FBF71"
+        android:pathData="M54,26
+                           C46,26 38,29 32,33
+                           V54
+                           C32,70 41,80.5 54,86
+                           C67,80.5 76,70 76,54
+                           V33
+                           C70,29 62,26 54,26
+                           Z" />
+    <!-- Checkmark, echoing the InCallScreen "Secure" (Icons.Filled.Shield) affordance -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M44,55 L52,63 L68,45" />
+</vector>
