@@ -1,67 +1,31 @@
 package com.dharanish.spoofguarddialer.ui.components
 
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Dialpad
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.dharanish.spoofguarddialer.ui.theme.SentinalDivider
-import com.dharanish.spoofguarddialer.ui.theme.SentinalEmerald
-import com.dharanish.spoofguarddialer.ui.theme.SentinalTextMuted
 
 enum class SentinalTab(val label: String, val icon: ImageVector) {
-    CONTACTS("Contacts", Icons.Filled.Person),
-    RECENTS("Recents", Icons.Filled.History),
-    KEYPAD("Keypad", Icons.Filled.Dialpad),
-    SETTINGS("Settings", Icons.Filled.Settings)
+    CONTACTS("Contacts", Icons.Default.Person), RECENTS("Recents", Icons.Default.History),
+    KEYPAD("Keypad", Icons.Default.Dialpad), SETTINGS("Settings", Icons.Default.Settings)
 }
 
 @Composable
-fun BottomNavBar(
-    current: SentinalTab,
-    onSelect: (SentinalTab) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .border(width = 0.5.dp, color = SentinalDivider)
-            .padding(vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceAround
-    ) {
+fun BottomNavBar(current: SentinalTab, onSelect: (SentinalTab) -> Unit, modifier: Modifier = Modifier) {
+    NavigationBar(modifier, containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp, windowInsets = WindowInsets(0, 0, 0, 0)) {
         SentinalTab.entries.forEach { tab ->
-            val active = tab == current
-            val tint = if (active) SentinalEmerald else SentinalTextMuted
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { onSelect(tab) }
-                    .padding(4.dp)
-            ) {
-                Icon(imageVector = tab.icon, contentDescription = tab.label, tint = tint, modifier = Modifier.padding(bottom = 4.dp))
-                Text(text = tab.label, color = tint, fontSize = 10.sp, fontWeight = FontWeight.Medium)
-            }
+            NavigationBarItem(selected = current == tab, onClick = { onSelect(tab) },
+                icon = { Icon(tab.icon, null) }, label = { Text(tab.label) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)))
         }
     }
 }

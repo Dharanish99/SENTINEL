@@ -30,8 +30,7 @@ class DialerRoleDebugViewModel(application: Application) : AndroidViewModel(appl
             Manifest.permission.READ_CONTACTS,
             Manifest.permission.CALL_PHONE,
             Manifest.permission.ANSWER_PHONE_CALLS,
-            Manifest.permission.POST_NOTIFICATIONS
-        )
+        ) + if (android.os.Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray()
     }
 
     fun refreshStatus() {

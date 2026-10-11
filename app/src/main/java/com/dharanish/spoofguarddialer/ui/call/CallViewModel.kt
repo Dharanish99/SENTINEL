@@ -9,6 +9,9 @@ import androidx.lifecycle.viewModelScope
 import com.dharanish.spoofguarddialer.telecomcore.CallBridgeController
 import com.dharanish.spoofguarddialer.telecomcore.SpoofGuardInCallService
 import com.dharanish.spoofguarddialer.telecomcore.TelecomCallRegistry
+import com.dharanish.spoofguarddialer.telecomcore.CallSelection
+import com.dharanish.spoofguarddialer.telecomcore.CallSnapshot
+import android.telecom.PhoneAccountHandle
 import com.dharanish.spoofguarddialer.util.ContactLookup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -22,26 +25,32 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class CallViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val currentCall: StateFlow<Call?> = TelecomCallRegistry.calls
-        .map { it.firstOrNull() }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val snapshots = TelecomCallRegistry.snapshots
+    val currentSnapshot: StateFlow<CallSnapshot?> = snapshots.map(CallSelection::primary)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, CallSelection.primary(snapshots.value))
+    val presentedSnapshot = combine(snapshots, TelecomCallRegistry.lastEndedCall, CallSelection::presentation)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, CallSelection.presentation(snapshots.value, TelecomCallRegistry.lastEndedCall.value))
+
+    private val currentCall: StateFlow<Call?> = currentSnapshot
+        .map { TelecomCallRegistry.find(it?.id) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val hasCall: StateFlow<Boolean> = TelecomCallRegistry.calls
         .map { it.isNotEmpty() }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, TelecomCallRegistry.calls.value.isNotEmpty())
 
-    val callState: StateFlow<Int?> = currentCall
-        .flatMapLatest { call -> call?.stateFlow() ?: flowOf(null) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val callState: StateFlow<Int?> = currentSnapshot.map { it?.state }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    val phoneNumber: StateFlow<String?> = currentCall
-        .map { it?.details?.handle?.schemeSpecificPart }
+    val phoneNumber: StateFlow<String?> = presentedSnapshot
+        .map { it?.number }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val callerName: StateFlow<String?> = phoneNumber
@@ -49,7 +58,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             if (number.isNullOrBlank()) {
                 flowOf<String?>(null)
             } else {
-                flow { emit(withContext(Dispatchers.IO) { ContactLookup.nameForNumber(getApplication(), number) }) }
+                flow { emit(null); emit(withContext(Dispatchers.IO) { ContactLookup.nameForNumber(getApplication(), number) }) }
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
@@ -65,12 +74,13 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         .map { it == Call.STATE_HOLDING }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
-    val isMuted: StateFlow<Boolean> = SpoofGuardInCallService.audioState
-        .map { it?.isMuted ?: false }
+    val audioRouting = SpoofGuardInCallService.routing
+    val isMuted: StateFlow<Boolean> = audioRouting
+        .map { it.muted }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
-    val isSpeakerOn: StateFlow<Boolean> = SpoofGuardInCallService.audioState
-        .map { it?.route == CallAudioState.ROUTE_SPEAKER }
+    val isSpeakerOn: StateFlow<Boolean> = audioRouting
+        .map { audio -> audio.routes.firstOrNull { it.id == audio.selectedId }?.type == CallAudioState.ROUTE_SPEAKER }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     private val _armSecureOnConnect = MutableStateFlow(false)
@@ -110,15 +120,15 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun answer() {
-        currentCall.value?.answer(VideoProfile.STATE_AUDIO_ONLY)
+        act { currentCall.value?.answer(VideoProfile.STATE_AUDIO_ONLY) }
     }
 
     fun reject() {
-        currentCall.value?.reject(false, null)
+        act { currentCall.value?.reject(false, null) }
     }
 
     fun hangUp() {
-        currentCall.value?.disconnect()
+        act { currentCall.value?.disconnect() }
     }
 
     fun setMuted(muted: Boolean) {
@@ -131,15 +141,59 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleHold() {
         val call = currentCall.value ?: return
-        if (call.state == Call.STATE_HOLDING) call.unhold() else call.hold()
+        if (currentSnapshot.value?.can(Call.Details.CAPABILITY_HOLD) != true) return
+        act { if (call.state == Call.STATE_HOLDING) call.unhold() else call.hold() }
     }
 
+    private var toneCall: Call? = null
     fun playDtmf(digit: Char) {
-        currentCall.value?.playDtmfTone(digit)
+        stopDtmf()
+        if (callState.value == Call.STATE_ACTIVE) act {
+            toneCall = currentCall.value
+            toneCall?.playDtmfTone(digit)
+        }
     }
 
     fun stopDtmf() {
-        currentCall.value?.stopDtmfTone()
+        act { toneCall?.stopDtmfTone() }
+        toneCall = null
+    }
+
+    private val _actionError = MutableStateFlow<String?>(null)
+    val actionError = _actionError.asStateFlow()
+    fun clearError() { _actionError.value = null; SpoofGuardInCallService.clearAudioError() }
+    private fun act(action: () -> Unit) {
+        try { action() } catch (_: RuntimeException) { _actionError.value = "This call action is unavailable. Please try again." }
+    }
+    fun selectAudio(id: String) = SpoofGuardInCallService.requestRoute(id)
+    fun swap() {
+        snapshots.value.firstOrNull { it.parentId == null && it.state == Call.STATE_HOLDING }
+            ?.let { held -> act { TelecomCallRegistry.find(held.id)?.unhold() } }
+    }
+    fun mergeCalls() {
+        val snapshot = currentSnapshot.value ?: return
+        val call = TelecomCallRegistry.find(snapshot.id) ?: return
+        val other = snapshot.conferenceableIds.firstNotNullOfOrNull(TelecomCallRegistry::find)
+        act {
+            if (other != null) call.conference(other)
+            else if (snapshot.can(Call.Details.CAPABILITY_MERGE_CONFERENCE)) call.mergeConference()
+        }
+    }
+    fun disconnectParticipant(id: String) = act {
+        snapshots.value.firstOrNull { it.id == id && it.can(Call.Details.CAPABILITY_DISCONNECT_FROM_CONFERENCE) }
+            ?.let { TelecomCallRegistry.find(id)?.disconnect() }
+    }
+    fun splitParticipant(id: String) = act {
+        snapshots.value.firstOrNull { it.id == id && it.can(Call.Details.CAPABILITY_SEPARATE_FROM_CONFERENCE) }
+            ?.let { TelecomCallRegistry.find(id)?.splitFromConference() }
+    }
+    fun selectAccount(handle: PhoneAccountHandle) = act { currentCall.value?.phoneAccountSelected(handle, false) }
+    fun rejectWithMessage(message: String) = act { currentCall.value?.reject(true, message) }
+    @android.annotation.SuppressLint("MissingPermission") // Telecom permits the default dialer; MODIFY_PHONE_STATE is only the alternative privileged path.
+    fun silence() = act {
+        val app = getApplication<Application>()
+        val telecom = app.getSystemService(android.telecom.TelecomManager::class.java)
+        if (telecom.defaultDialerPackage == app.packageName) telecom.silenceRinger()
     }
 
     companion object {

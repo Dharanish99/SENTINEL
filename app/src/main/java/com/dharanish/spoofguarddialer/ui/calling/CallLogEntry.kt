@@ -5,7 +5,10 @@ data class CallLogEntry(
     val number: String,
     val type: CallType,
     val timestampMillis: Long,
-    val durationSeconds: Long
+    val durationSeconds: Long,
+    val id: Long = 0,
+    val presentation: Int = 1,
+    val accountId: String? = null,
 )
 
 enum class CallType {

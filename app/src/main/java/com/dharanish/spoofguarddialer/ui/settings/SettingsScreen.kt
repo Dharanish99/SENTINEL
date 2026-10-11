@@ -1,6 +1,12 @@
 package com.dharanish.spoofguarddialer.ui.settings
 
 import android.app.role.RoleManager
+import android.app.NotificationManager
+import android.os.Build
+import android.telecom.TelecomManager
+import androidx.compose.material3.Switch
+import com.dharanish.spoofguarddialer.util.DialerPreferences
+import com.dharanish.spoofguarddialer.util.PhoneActions
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -49,6 +55,10 @@ fun SettingsScreen(
     val context = LocalContext.current
     var alwaysProtect by remember { mutableStateOf(SecuritySettings.isAlwaysProtectEnabled(context)) }
     var autoSecureUnknown by remember { mutableStateOf(SecuritySettings.isAutoSecureUnknownCallersEnabled(context)) }
+    var haptics by remember { mutableStateOf(DialerPreferences.haptics(context)) }
+    var tones by remember { mutableStateOf(DialerPreferences.tones(context)) }
+    var notificationsEnabled by remember { mutableStateOf(context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()) }
+    var fullScreenEnabled by remember { mutableStateOf(Build.VERSION.SDK_INT < 34 || context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()) }
     val roleManager = remember { context.getSystemService(RoleManager::class.java) }
 
     fun checkDefaultDialer(): Boolean = roleManager?.isRoleHeld(RoleManager.ROLE_DIALER) ?: false
@@ -77,6 +87,8 @@ fun SettingsScreen(
             if (event == Lifecycle.Event.ON_RESUME) {
                 isDefaultDialer = checkDefaultDialer()
                 roleAvailable = checkRoleAvailable()
+                notificationsEnabled = context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
+                fullScreenEnabled = Build.VERSION.SDK_INT < 34 || context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -170,6 +182,28 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(22.dp))
+            SettingsSection("Calling experience") {
+                SettingsRow(label = "Keypad vibration", sub = "Subtle feedback when dialing", trailing = {
+                    Switch(checked = haptics, onCheckedChange = { haptics = it; DialerPreferences.setHaptics(context, it) })
+                })
+                SettingsRow(label = "Keypad sounds", sub = "Play a tone while entering a number", trailing = {
+                    Switch(checked = tones, onCheckedChange = { tones = it; DialerPreferences.setTones(context, it) })
+                })
+                SettingsRow(label = "Call notifications", sub = if (notificationsEnabled) "Enabled · incoming, ongoing and missed calls" else "Disabled · enable to see calls outside the app", onClick = {
+                    PhoneActions.launch(context, Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+                }, trailing = { Icon(Icons.Default.ChevronRight, null) })
+                if (Build.VERSION.SDK_INT >= 34) SettingsRow(label = "Lock-screen incoming calls", sub = if (fullScreenEnabled) "Full-screen call alerts allowed" else "Allow full-screen alerts to answer on the lock screen", onClick = {
+                    PhoneActions.launch(context, Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:" + context.packageName)))
+                }, trailing = { Icon(Icons.Default.ChevronRight, null) })
+                SettingsRow(label = "Ringtone and vibration", sub = "Use the phone's sound settings", onClick = { PhoneActions.launch(context, Intent(Settings.ACTION_SOUND_SETTINGS)) }, trailing = { Icon(Icons.Default.ChevronRight, null) })
+                SettingsRow(label = "Blocked numbers", sub = "Manage numbers blocked by Android", onClick = {
+                    val intent = runCatching { context.getSystemService(TelecomManager::class.java).createManageBlockedNumbersIntent() }.getOrNull()
+                    if (intent != null) PhoneActions.launch(context, intent)
+                }, trailing = { Icon(Icons.Default.ChevronRight, null) })
+                SettingsRow(label = "SIM and carrier settings", sub = "Voicemail, call waiting and forwarding", onClick = { PhoneActions.launch(context, Intent(TelecomManager.ACTION_SHOW_CALL_SETTINGS)) }, trailing = { Icon(Icons.Default.ChevronRight, null) })
+            }
+
+            Spacer(Modifier.height(22.dp))
             SettingsSection("About") {
                 SettingsRow(label = "Version", trailing = { Text("1.0.0", color = SentinalTextMuted, fontSize = 11.sp) })
                 SettingsRow(
@@ -242,12 +276,5 @@ private fun SettingsRow(
 
 @Composable
 private fun Toggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    val bg = if (checked) SentinalEmerald else Color(0xFF3A3A3A)
-    Box(modifier = Modifier.size(width = 44.dp, height = 26.dp).clip(RoundedCornerShape(999.dp)).background(bg).clickable { onCheckedChange(!checked) }) {
-        Box(
-            modifier = Modifier.padding(3.dp).size(20.dp)
-                .align(if (checked) Alignment.CenterEnd else Alignment.CenterStart)
-                .clip(RoundedCornerShape(50)).background(Color.White)
-        )
-    }
+    Switch(checked = checked, onCheckedChange = onCheckedChange)
 }

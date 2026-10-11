@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.SpoofGuardDialer" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.SpoofGuardDialer.Base" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#111111</item>
+        <item name="android:colorAccent">#10B981</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+    <style name="Theme.SpoofGuardDialer" parent="Theme.SpoofGuardDialer.Base" />
 </resources>

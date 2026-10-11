@@ -13,6 +13,10 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -50,7 +54,12 @@ fun IncomingCallScreen(
     isVerified: Boolean,
     onAnswer: (armed: Boolean) -> Unit,
     onReject: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onSilence: () -> Unit = {},
+    onMessage: () -> Unit = {},
+    canMessage: Boolean = true,
+    callWaiting: Boolean = false,
+    accountLabel: String? = null,
 ) {
     val context = LocalContext.current
     // Unknown callers default-arm based on the "Auto-secure unknown callers"
@@ -60,7 +69,7 @@ fun IncomingCallScreen(
     }
 
     Column(
-        modifier = modifier.fillMaxSize().background(SentinalBg),
+        modifier = modifier.fillMaxSize().background(SentinalBg).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Column(
@@ -74,6 +83,8 @@ fun IncomingCallScreen(
             }
 
             Spacer(Modifier.height(28.dp))
+            Text(if (callWaiting) "Call waiting" else "Incoming call", color = SentinalTextSecondary)
+            accountLabel?.let { Text(it, color = SentinalTextSecondary, fontSize = 12.sp) }
             AvatarAura(
                 initial = callerName.trimStart('+').take(1).uppercase(),
                 // Reusing THREAT purely for its amber ring color here — this screen
@@ -139,8 +150,8 @@ fun IncomingCallScreen(
                 modifier = Modifier.padding(top = 26.dp),
                 horizontalArrangement = Arrangement.spacedBy(46.dp)
             ) {
-                QuickAction(icon = Icons.Filled.Notifications, label = "Remind me")
-                QuickAction(icon = Icons.Filled.Message, label = "Message")
+                QuickAction(icon = Icons.Filled.Notifications, label = "Silence", onClick = onSilence)
+                if (canMessage) QuickAction(icon = Icons.Filled.Message, label = "Message", onClick = onMessage)
             }
         }
 
@@ -169,13 +180,13 @@ fun IncomingCallScreen(
 }
 
 @Composable
-private fun QuickAction(icon: ImageVector, label: String) {
+private fun QuickAction(icon: ImageVector, label: String, onClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
-            modifier = Modifier.size(52.dp).background(SentinalBtnBg, CircleShape),
+            modifier = Modifier.size(52.dp).background(SentinalBtnBg, CircleShape).clickable(onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
-            Icon(icon, null, tint = SentinalTextPrimary, modifier = Modifier.size(24.dp))
+            Icon(icon, label, tint = SentinalTextPrimary, modifier = Modifier.size(24.dp))
         }
         Spacer(Modifier.height(8.dp))
         Text(label, color = SentinalTextSecondary, fontSize = 11.sp)
@@ -225,6 +236,12 @@ private fun SlideToAnswer(onAnswer: () -> Unit, modifier: Modifier = Modifier) {
                 .padding(start = 3.dp)
                 .size(50.dp)
                 .background(SentinalEmerald, CircleShape)
+                .semantics {
+                    onClick(label = "Answer call") {
+                        if (!answered) { answered = true; onAnswer() }
+                        true
+                    }
+                }
                 .draggable(
                     orientation = Orientation.Horizontal,
                     state = rememberDraggableState { delta ->
@@ -233,7 +250,7 @@ private fun SlideToAnswer(onAnswer: () -> Unit, modifier: Modifier = Modifier) {
                     },
                     onDragStopped = {
                         val max = (trackWidthPx - handleSizePx - handleStartPx * 2).coerceAtLeast(1f)
-                        if (offsetX >= max * 0.82f) {
+                        if (!answered && offsetX >= max * 0.82f) {
                             answered = true
                             onAnswer()
                         } else {

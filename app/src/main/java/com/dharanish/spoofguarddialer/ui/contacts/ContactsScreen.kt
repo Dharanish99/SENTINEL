@@ -30,6 +30,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Close
+import com.dharanish.spoofguarddialer.util.PhoneActions
+import com.dharanish.spoofguarddialer.ui.components.NumberActionsSheet
+import com.dharanish.spoofguarddialer.telecomcore.DialString
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -44,6 +53,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,6 +68,9 @@ import com.dharanish.spoofguarddialer.ui.components.SentinalTab
 import com.dharanish.spoofguarddialer.ui.components.SmallAvatar
 import com.dharanish.spoofguarddialer.ui.theme.*
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -68,12 +81,17 @@ private val BUBBLE_SIZE = 56.dp
 fun ContactsScreen(
     currentTab: SentinalTab,
     onTabSelect: (SentinalTab) -> Unit,
+    onEditNumber: (String) -> Unit = {},
+    permissionRevision: Int = 0,
     modifier: Modifier = Modifier,
     viewModel: ContactsViewModel = viewModel()
 ) {
     val contacts by viewModel.contacts.collectAsState()
     val context = LocalContext.current
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
+    var favoritesOnly by rememberSaveable { mutableStateOf(false) }
+    val favorites by viewModel.favorites.collectAsState()
+    var selectedContact by remember { mutableStateOf<ContactEntry?>(null) }
 
     fun hasPermission() = ContextCompat.checkSelfPermission(
         context, Manifest.permission.READ_CONTACTS
@@ -92,23 +110,29 @@ fun ContactsScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(permissionGranted) {
-        if (permissionGranted) viewModel.loadContacts()
+    LaunchedEffect(permissionGranted, permissionRevision) {
+        permissionGranted = hasPermission()
+        viewModel.loadContacts()
     }
 
-    val filtered = remember(contacts, query) {
-        if (query.isBlank()) contacts
-        else contacts.filter { it.name.contains(query, ignoreCase = true) || it.number.contains(query) }
-    }
-
-    val sections = remember(filtered) {
-        filtered
-            .groupBy { entry ->
-                val c = entry.name.firstOrNull()?.uppercaseChar()
-                if (c != null && c in 'A'..'Z') c else '#'
-            }
-            .toSortedMap()
-            .map { (letter, list) -> letter to list.sortedBy { it.name } }
+    // Filtering/grouping thousands of contacts must not compete with fling frames.
+    val sections by produceState<List<Pair<Char, List<ContactEntry>>>>(emptyList(), contacts, query, favoritesOnly, favorites) {
+        val sourceContacts = contacts
+        val filterQuery = query.trim()
+        val onlyFavorites = favoritesOnly
+        val favoriteNumbers = favorites
+        if (filterQuery.isNotBlank()) delay(120)
+        value = withContext(Dispatchers.Default) {
+            val numberQuery = DialString.normalize(filterQuery)
+            sourceContacts.asSequence().filter {
+                (!onlyFavorites || it.normalizedNumber in favoriteNumbers) &&
+                    (filterQuery.isBlank() || it.name.contains(filterQuery, ignoreCase = true) ||
+                        (numberQuery.isNotBlank() && it.normalizedNumber.contains(numberQuery)))
+            }.groupBy { entry ->
+                entry.name.firstOrNull()?.uppercaseChar()?.takeIf { it in 'A'..'Z' } ?: '#'
+            }.entries.sortedBy { if (it.key == '#') Char.MAX_VALUE else it.key }
+                .map { it.key to it.value } // Provider already returns localized name order.
+        }
     }
 
     val letterIndex = remember(sections) {
@@ -146,10 +170,15 @@ fun ContactsScreen(
     }
 
     Column(modifier = modifier.fillMaxSize().background(SentinalBg)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             "Contacts", style = MaterialTheme.typography.headlineMedium, color = SentinalTextPrimary,
-            modifier = Modifier.padding(start = 22.dp, top = 18.dp, bottom = 4.dp)
+            modifier = Modifier.weight(1f).padding(start = 22.dp, top = 18.dp, bottom = 4.dp)
         )
+        IconButton(onClick = { PhoneActions.addContact(context, "") }, modifier = Modifier.padding(end = 12.dp, top = 12.dp)) {
+            Icon(Icons.Default.PersonAdd, "Create contact")
+        }
+        }
 
         if (!permissionGranted) {
             PermissionNeededPrompt(
@@ -183,8 +212,15 @@ fun ContactsScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+                if (query.isNotEmpty()) IconButton(onClick = { query = "" }, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.Close, "Clear search")
+                }
             }
 
+            Row(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !favoritesOnly, onClick = { favoritesOnly = false }, label = { Text("All contacts") })
+                FilterChip(selected = favoritesOnly, onClick = { favoritesOnly = true }, label = { Text("Favorites") }, leadingIcon = { Icon(Icons.Default.Star, null, Modifier.size(16.dp)) })
+            }
             // This Box's height (weight(1f)) is exactly the area between the search bar
             // and the bottom nav — the alphabet sidebar and its bubble are measured
             // against THIS height, so they naturally never overlap the footer below.
@@ -194,30 +230,13 @@ fun ContactsScreen(
                     modifier = Modifier.fillMaxSize().padding(start = 20.dp, end = 36.dp)
                 ) {
                     sections.forEach { (letter, sectionContacts) ->
-                        item(key = "header_$letter") {
+                        item(key = "header_$letter", contentType = "section") {
                             Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                                 Text(letter.toString(), color = SentinalEmerald, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
                         }
-                        items(sectionContacts, key = { it.number }) { contact ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null,
-                                        onClick = { CallPlacer.place(context, contact.number) }
-                                    )
-                                    .padding(vertical = 10.dp)
-                            ) {
-                                SmallAvatar(initial = contact.name.take(1).uppercase())
-                                Spacer(Modifier.width(12.dp))
-                                Column {
-                                    Text(contact.name, style = MaterialTheme.typography.titleMedium, color = SentinalTextPrimary)
-                                    Text(contact.number, color = SentinalTextMuted, fontSize = 12.sp)
-                                }
-                            }
-                            HorizontalDivider(color = SentinalDivider, thickness = 0.5.dp)
+                        items(sectionContacts, key = { it.normalizedNumber }, contentType = { "contact" }) { contact ->
+                            ContactRow(contact, onOpen = { selectedContact = contact }, onCall = { CallPlacer.place(context, contact.number) })
                         }
                     }
                 }
@@ -229,12 +248,43 @@ fun ContactsScreen(
                         scrubLetter = if (letter in availableLetters) letter
                         else availableLetters.minByOrNull { abs(it.code - letter.code) }
                     },
+                    onScrubEnd = { scrubLetter = null },
                     modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(28.dp)
                 )
+                if (sections.isEmpty()) Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (viewModel.isLoading) CircularProgressIndicator()
+                    else {
+                        Text(viewModel.error ?: if (query.isNotBlank()) "No matching contacts" else if (favoritesOnly) "Your favorites will appear here" else "No contacts yet", style = MaterialTheme.typography.bodyLarge)
+                        if (viewModel.error != null) TextButton(onClick = { viewModel.loadContacts() }) { Text("Try again") }
+                        else if (favoritesOnly) Text("Open a contact to add it to favorites", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
         }
 
         BottomNavBar(current = currentTab, onSelect = onTabSelect)
+    }
+    selectedContact?.let { contact -> NumberActionsSheet(
+        title = contact.name, number = contact.number, lookupUri = contact.lookupUri, details = contact.label,
+        onDismiss = { selectedContact = null }, onEditNumber = onEditNumber,
+        favorite = DialString.normalize(contact.number) in favorites, onFavorite = { viewModel.toggleFavorite(contact.number) },
+    ) }
+}
+
+@Composable
+private fun ContactRow(contact: ContactEntry, onOpen: () -> Unit, onCall: () -> Unit) {
+    Column {
+        Row(Modifier.fillMaxWidth().clickable(onClick = onOpen).heightIn(min = 72.dp).padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            SmallAvatar(initial = contact.initial)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(contact.name, style = MaterialTheme.typography.titleMedium, color = SentinalTextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(contact.number, color = SentinalTextMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton(onClick = onCall) { Icon(Icons.Default.Call, "Call " + contact.name) }
+        }
+        HorizontalDivider(color = SentinalDivider, thickness = 0.5.dp)
     }
 }
 
@@ -243,10 +293,13 @@ private fun AlphabetSidebar(
     letters: List<Char>,
     availableLetters: Set<Char>,
     onScrub: (Char) -> Unit,
+    onScrubEnd: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
     val haptics = LocalHapticFeedback.current
+    val currentOnScrub by rememberUpdatedState(onScrub)
+    val currentOnScrubEnd by rememberUpdatedState(onScrubEnd)
     var activeIndex by remember { mutableIntStateOf(-1) }
     var touchY by remember { mutableFloatStateOf(0f) }
     var heightPx by remember { mutableFloatStateOf(0f) }
@@ -261,15 +314,12 @@ private fun AlphabetSidebar(
         if (idx != activeIndex) {
             activeIndex = idx
             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            onScrub(letters[idx])
+            currentOnScrub(letters[idx])
         }
     }
 
     // Bubble's own top-left Y, clamped so the full 56dp bubble always stays
     // within the sidebar's own height — never spilling past the bottom (or top).
-    val bubbleY = (touchY - bubbleSizePx / 2f)
-        .coerceIn(0f, (heightPx - bubbleSizePx).coerceAtLeast(0f))
-
     Box(modifier = modifier) {
         Column(
             modifier = Modifier
@@ -284,17 +334,22 @@ private fun AlphabetSidebar(
                 // every move from the first frame gives true 1:1 tracking.
                 .pointerInput(letters) {
                     awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        updateFromY(down.position.y)
-                        val pointerId = down.id
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == pointerId } ?: break
-                            if (!change.pressed) break
-                            change.consume()
-                            updateFromY(change.position.y)
+                        try {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
+                            updateFromY(down.position.y)
+                            val pointerId = down.id
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                                if (!change.pressed) break
+                                change.consume()
+                                updateFromY(change.position.y)
+                            }
+                        } finally {
+                            activeIndex = -1
+                            currentOnScrubEnd()
                         }
-                        activeIndex = -1
                     }
                 },
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -320,7 +375,9 @@ private fun AlphabetSidebar(
                 .offset {
                     IntOffset(
                         x = with(density) { (-60).dp.roundToPx() },
-                        y = bubbleY.roundToInt()
+                        // Read motion state during layout, not composition on every pixel.
+                        y = (touchY - bubbleSizePx / 2f)
+                            .coerceIn(0f, (heightPx - bubbleSizePx).coerceAtLeast(0f)).roundToInt()
                     )
                 }
         ) {

@@ -12,12 +12,12 @@ object ContactLookup {
             Uri.encode(number)
         )
         val projection = arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME)
-        context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+        try { context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) {
                 val idx = cursor.getColumnIndex(ContactsContract.PhoneLookup.DISPLAY_NAME)
                 if (idx >= 0) return cursor.getString(idx)
             }
-        }
+        } } catch (_: SecurityException) { return null }
         return null
     }
 }

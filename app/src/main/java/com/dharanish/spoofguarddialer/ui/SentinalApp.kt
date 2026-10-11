@@ -1,11 +1,17 @@
 package com.dharanish.spoofguarddialer.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import com.dharanish.spoofguarddialer.telecomcore.CallPlacer
+import androidx.compose.ui.unit.dp
+import com.dharanish.spoofguarddialer.telecomcore.SpoofGuardInCallService
+import com.dharanish.spoofguarddialer.telecomcore.TelecomCallRegistry
 import com.dharanish.spoofguarddialer.ui.components.SentinalTab
 import com.dharanish.spoofguarddialer.ui.contacts.ContactsScreen
 import com.dharanish.spoofguarddialer.ui.debug.CallBridgeDebugScreen
@@ -14,51 +20,52 @@ import com.dharanish.spoofguarddialer.ui.dialpad.DialpadScreen
 import com.dharanish.spoofguarddialer.ui.recents.RecentsScreen
 import com.dharanish.spoofguarddialer.ui.settings.SettingsScreen
 
-private sealed interface RootScreen {
-    data class Tabs(val tab: SentinalTab) : RootScreen
-    data object DialerRoleDebug : RootScreen
-    data object BridgeTestDebug : RootScreen
-}
-
 @Composable
-fun SentinalApp(modifier: Modifier = Modifier) {
-    var screen by remember { mutableStateOf<RootScreen>(RootScreen.Tabs(SentinalTab.KEYPAD)) }
+fun SentinalApp(
+    modifier: Modifier = Modifier, initialNumber: String? = null, dialRequest: Long = 0,
+    openRecents: Boolean = false, permissionRevision: Int = 0, onIntentConsumed: () -> Unit = {},
+) {
+    var tabName by rememberSaveable { mutableStateOf(SentinalTab.KEYPAD.name) }
+    var debugScreen by rememberSaveable { mutableStateOf<String?>(null) }
+    var dialed by rememberSaveable { mutableStateOf("") }
+    var appliedRequest by rememberSaveable { mutableLongStateOf(-1L) }
+    val tab = SentinalTab.valueOf(tabName)
     val context = LocalContext.current
+    val calls by TelecomCallRegistry.snapshots.collectAsState()
+    val tabSelect: (SentinalTab) -> Unit = { tabName = it.name; debugScreen = null }
+    val editNumber: (String) -> Unit = { dialed = it; tabSelect(SentinalTab.KEYPAD) }
 
-    // From a developer/debug screen, back returns to the Settings tab.
-    BackHandler(enabled = screen !is RootScreen.Tabs) {
-        screen = RootScreen.Tabs(SentinalTab.SETTINGS)
+    LaunchedEffect(dialRequest, initialNumber, openRecents) {
+        if (initialNumber != null && appliedRequest != dialRequest) {
+            dialed = initialNumber; appliedRequest = dialRequest; tabSelect(SentinalTab.KEYPAD)
+            onIntentConsumed()
+        } else if (openRecents) { tabSelect(SentinalTab.RECENTS); onIntentConsumed() }
     }
-
-    // From any non-keypad tab, back returns to the keypad ("home") tab first —
-    // standard bottom-nav convention. Only on the keypad tab does back fall
-    // through to the system default (exiting the app).
-    val currentTab = (screen as? RootScreen.Tabs)?.tab
-    BackHandler(enabled = currentTab != null && currentTab != SentinalTab.KEYPAD) {
-        screen = RootScreen.Tabs(SentinalTab.KEYPAD)
+    BackHandler(enabled = debugScreen != null || tab != SentinalTab.KEYPAD) {
+        if (debugScreen != null) { debugScreen = null; tabName = SentinalTab.SETTINGS.name }
+        else tabName = SentinalTab.KEYPAD.name
     }
-
-    Box(modifier = modifier) {
-        when (val s = screen) {
-            is RootScreen.Tabs -> when (s.tab) {
-                SentinalTab.KEYPAD -> DialpadScreen(
-                    currentTab = s.tab,
-                    onTabSelect = { screen = RootScreen.Tabs(it) },
-                    onCallClick = { number ->
-                        if (number.isNotBlank()) CallPlacer.place(context, number)
-                    }
-                )
-                SentinalTab.CONTACTS -> ContactsScreen(s.tab, { screen = RootScreen.Tabs(it) })
-                SentinalTab.RECENTS -> RecentsScreen(s.tab, { screen = RootScreen.Tabs(it) })
-                SentinalTab.SETTINGS -> SettingsScreen(
-                    currentTab = s.tab,
-                    onTabSelect = { screen = RootScreen.Tabs(it) },
-                    onOpenDialerRoleDebug = { screen = RootScreen.DialerRoleDebug },
-                    onOpenBridgeTestDebug = { screen = RootScreen.BridgeTestDebug }
-                )
+    Column(modifier) {
+        if (calls.isNotEmpty()) {
+            Surface(onClick = { SpoofGuardInCallService.openCallUi(context) }, color = MaterialTheme.colorScheme.primaryContainer) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
+                    Icon(Icons.Default.Call, null, Modifier.size(20.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text("Return to call", style = MaterialTheme.typography.bodyMedium)
+                }
             }
-            RootScreen.DialerRoleDebug -> DialerRoleDebugScreen()
-            RootScreen.BridgeTestDebug -> CallBridgeDebugScreen()
+        }
+        Box(Modifier.weight(1f)) {
+            when (debugScreen) {
+                "role" -> DialerRoleDebugScreen()
+                "bridge" -> CallBridgeDebugScreen()
+                else -> when (tab) {
+                    SentinalTab.KEYPAD -> DialpadScreen(tab, tabSelect, dialed = dialed, onDialedChange = { dialed = it }, permissionRevision = permissionRevision)
+                    SentinalTab.CONTACTS -> ContactsScreen(tab, tabSelect, onEditNumber = editNumber, permissionRevision = permissionRevision)
+                    SentinalTab.RECENTS -> RecentsScreen(tab, tabSelect, onEditNumber = editNumber, permissionRevision = permissionRevision)
+                    SentinalTab.SETTINGS -> SettingsScreen(tab, tabSelect, onOpenDialerRoleDebug = { debugScreen = "role" }, onOpenBridgeTestDebug = { debugScreen = "bridge" })
+                }
+            }
         }
     }
 }
